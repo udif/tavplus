@@ -52,21 +52,44 @@ with warnings.catch_warnings():
     warnings.filterwarnings("ignore", category=InsecureRequestWarning)
     for i in range(sheet.min_row, sheet.max_row+1):
         id = sheet.cell(row=i, column=1).value
+        code = sheet.cell(row=i, column=2).value
         if cards.get(id, -1) == 0:
             continue
-        bj = requests.post(url='https://tavplus.mltp.co.il/multipassapi/getbudget.php', data={'cardid':id}, verify=False)
-        b = json.loads(bj.text)
-        if b['ResultMessage'] != '' and b['ResultId'] == 0:
-            cards[id] = int(b['UpdatedBugdet']) / 100.0
-        if cards[id] > 0:
-            print("ID:", id, '=>',  cards[id])
+        l = len(str(id))
+        if l == 8:
+            bj = requests.post(url='https://tavplus.mltp.co.il/multipassapi/getbudget.php', data={'cardid':id}, verify=False)
+            b = json.loads(bj.text)
+            if b['ResultMessage'] != '' and b['ResultId'] == 0:
+                cards[id] = int(b['UpdatedBugdet']) / 100.0
+            bj = requests.post(url='https://tavplus.mltp.co.il/multipassapi/GetLastTransactions.php', data={'cardid':id}, verify=False)
+            b = json.loads(bj.text)
+            for field in b['data']:
+                d = field['date']
+                dep = field['LoadActualSum'] != ''
+                xactions[(d, id)] = {'name': field['SupplierName'], 'deposit':dep, 'sum': field['LoadActualSum'] if dep else field['ApprovedSum']}
+        elif l == 16:
+            id = str(id)
+            bj = requests.post(url='https://www.shufersal.co.il/myshufersal/api/CardBalanceApi/GetCardBalanceAndTransactions', data={'cardNumber':str(id)+str(code)}, verify=False)
+            b = json.loads(bj.text)
+            if b['HasCard'] == True and b['InactiveCard'] == False:
+                cards[id] = b['CurrentBalance']
+            elif b['HasCard'] == False:
+                continue
+            for field in b['Transactions']:
+                d = field['DateObject']
+                dep = field['ActivityType'] == 'deposit'
+                am = field['Amount']
+                xactions[(d, id)] = {'name': field['BusinessName'], 'deposit':dep, 'sum':str(am) if dep else str(-am)}
         else:
+            print("Unknown ID:", id)
+            continue
+        v =  cards.get(id, -1)
+        if  v > 0:
+            print("ID: {}-{} => {}".format(id, code,  cards[id]))
+        elif v == 0:
             print('ID:', id)
-        bj = requests.post(url='https://tavplus.mltp.co.il/multipassapi/GetLastTransactions.php', data={'cardid':id}, verify=False)
-        b = json.loads(bj.text)
-        for field in b['data']:
-            d = field.pop('date')
-            xactions[(d, id)] = field
+        else:
+            print("Unknown card:", id)
 
 save_prev_file(data_file, "pickle")
 with open(data_file, "wb") as f:
@@ -81,20 +104,26 @@ ws = wb.active
 ws.title = "קניות"
 ws.cell(row=1, column=1).value = "תאריך"
 ws.cell(row=1, column=2).value = "שעה"
-ws.cell(row=1, column=3).value = "סכום"
-ws.cell(row=1, column=4).value = "כרטיס"
+ws.cell(row=1, column=3).value = "מיקום"
+ws.cell(row=1, column=4).value = "סכום"
+ws.cell(row=1, column=5).value = "טעינה"
+ws.cell(row=1, column=6).value = "כרטיס"
 row = 2
 for ((d, id), fields) in sorted(xactions.items()):
     dt = datetime.from_ISO8601(d)
-    ws.cell(row=row, column=1).value = dt
-    #ws.cell(row=row, column=2).value = d[1]
-    v = fields['ApprovedSum']
+    ws.cell(row=row, column=1).value = dt.date()
+    ws.cell(row=row, column=2).value = dt.time()
+    v = fields['sum']
+    dep = fields['deposit']
     if not v or v == '':
         v = 0.0
-        print(d, id, fields)
-    ws.cell(row=row, column=3).value = float(v)
-    ws.cell(row=row, column=3).number_format = numbers.FORMAT_NUMBER_00
-    ws.cell(row=row, column=4).value = id
+        #print(d, id, fields)
+    ws.cell(row=row, column=3).value = fields['name']
+    ws.cell(row=row, column=4).value = float(v) if not dep else 0
+    ws.cell(row=row, column=4).number_format = numbers.FORMAT_NUMBER_00
+    ws.cell(row=row, column=5).value = float(v) if dep else 0
+    ws.cell(row=row, column=5).number_format = numbers.FORMAT_NUMBER_00
+    ws.cell(row=row, column=6).value = id
     row += 1
 save_prev_file(output_xls_file, "xlsx")
 wb.save(output_xls_file)
