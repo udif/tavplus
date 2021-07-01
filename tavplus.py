@@ -10,7 +10,9 @@ import warnings
 import pickle
 import os
 import sys
+#import pprint
 
+#pp = pprint.PrettyPrinter(indent=4)
 data_file = 'cards_data.pickle'
 
 def save_prev_file(name, ext):
@@ -22,6 +24,44 @@ def save_prev_file(name, ext):
 
 cards = {}
 xactions = {}
+
+def handle_ybitan(id, code):
+    bj = requests.post(url='https://tavplus.mltp.co.il/multipassapi/getbudget.php', data={'cardid':id}, verify=False)
+    b = json.loads(bj.text)
+    if b['ResultMessage'] != '' and b['ResultId'] == 0:
+        cards[id] = int(b['UpdatedBugdet']) / 100.0
+    bj = requests.post(url='https://tavplus.mltp.co.il/multipassapi/GetLastTransactions.php', data={'cardid':id}, verify=False)
+    b = json.loads(bj.text)
+    for field in b['data']:
+        d = field['date']
+        dep = field['LoadActualSum'] != ''
+        xactions[(d, id)] = {'name': field['SupplierName'], 'deposit':dep, 'sum': field['LoadActualSum'] if dep else field['ApprovedSum']}
+
+def handle_tav_zahav(id, code):
+    id = str(id)
+    bj = requests.post(url='https://www.shufersal.co.il/myshufersal/api/CardBalanceApi/GetCardBalanceAndTransactions', data={'cardNumber':str(id)+str(code)}, verify=False)
+    b = json.loads(bj.text)
+    if b['HasCard'] == True and b['InactiveCard'] == False:
+        cards[id] = b['CurrentBalance']
+    elif b['HasCard'] == False:
+        return
+    for field in b['Transactions']:
+        d = field['DateObject']
+        dep = field['ActivityType'] == 'deposit'
+        am = field['Amount']
+        xactions[(d, id)] = {'name': field['BusinessName'], 'deposit':dep, 'sum':str(am) if dep else str(-am)}
+
+def detect_paytment_method(id, code):
+    l = len(str(id))
+    if l == 8:
+        handle_ybitan(id, code)
+    elif l == 16:
+        handle_tav_zahav(id, code)
+    else:
+        print("Unknown ID:", id)
+        return False
+    return True
+
 try:
     with open(data_file, "rb") as f:
         cards = pickle.load(f)
@@ -55,33 +95,7 @@ with warnings.catch_warnings():
         code = sheet.cell(row=i, column=2).value
         if cards.get(id, -1) == 0:
             continue
-        l = len(str(id))
-        if l == 8:
-            bj = requests.post(url='https://tavplus.mltp.co.il/multipassapi/getbudget.php', data={'cardid':id}, verify=False)
-            b = json.loads(bj.text)
-            if b['ResultMessage'] != '' and b['ResultId'] == 0:
-                cards[id] = int(b['UpdatedBugdet']) / 100.0
-            bj = requests.post(url='https://tavplus.mltp.co.il/multipassapi/GetLastTransactions.php', data={'cardid':id}, verify=False)
-            b = json.loads(bj.text)
-            for field in b['data']:
-                d = field['date']
-                dep = field['LoadActualSum'] != ''
-                xactions[(d, id)] = {'name': field['SupplierName'], 'deposit':dep, 'sum': field['LoadActualSum'] if dep else field['ApprovedSum']}
-        elif l == 16:
-            id = str(id)
-            bj = requests.post(url='https://www.shufersal.co.il/myshufersal/api/CardBalanceApi/GetCardBalanceAndTransactions', data={'cardNumber':str(id)+str(code)}, verify=False)
-            b = json.loads(bj.text)
-            if b['HasCard'] == True and b['InactiveCard'] == False:
-                cards[id] = b['CurrentBalance']
-            elif b['HasCard'] == False:
-                continue
-            for field in b['Transactions']:
-                d = field['DateObject']
-                dep = field['ActivityType'] == 'deposit'
-                am = field['Amount']
-                xactions[(d, id)] = {'name': field['BusinessName'], 'deposit':dep, 'sum':str(am) if dep else str(-am)}
-        else:
-            print("Unknown ID:", id)
+        if not detect_paytment_method(id, code):
             continue
         v =  cards.get(id, -1)
         if  v > 0:
@@ -109,7 +123,8 @@ ws.cell(row=1, column=4).value = "סכום"
 ws.cell(row=1, column=5).value = "טעינה"
 ws.cell(row=1, column=6).value = "כרטיס"
 row = 2
-for ((d, id), fields) in sorted(xactions.items()):
+for (d, id) in sorted(xactions.keys(), key=lambda item:item[0]):
+    fields = xactions[(d, id)]
     dt = datetime.from_ISO8601(d)
     ws.cell(row=row, column=1).value = dt.date()
     ws.cell(row=row, column=2).value = dt.time()
