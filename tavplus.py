@@ -10,10 +10,13 @@ import warnings
 import pickle
 import os
 import sys
+import argparse
 #import pprint
 
 #pp = pprint.PrettyPrinter(indent=4)
-data_file = 'cards_data.pickle'
+
+cards = {}
+xactions = {}
 
 def save_prev_file(name, ext):
     old = ("_old."+ext).join(name.rsplit("."+ext, 1))
@@ -21,9 +24,6 @@ def save_prev_file(name, ext):
         if os.path.isfile(old):
             os.remove(old)
         os.rename(name, old)
-
-cards = {}
-xactions = {}
 
 def handle_ybitan(id, code):
     bj = requests.post(url='https://tavplus.mltp.co.il/multipassapi/getbudget.php', data={'cardid':id}, verify=False)
@@ -62,8 +62,27 @@ def detect_paytment_method(id, code):
         return False
     return True
 
+parser = argparse.ArgumentParser(description="""
+This utility parses an XLSX file with a list of Prepaid cards.
+You can then get a report of all your purchases saved to an output XLSX file.
+Only new cards added to the input XLSX file are read from the internet.
+Currently supported:
+Yenot Bitan
+Tav Hazahav (non-7215)
+TODO:
+Isracard
+Max
+""")
+#parser.add_argument("-v", "--verbose", help="increase output verbosity", action="store_true", type=int)
+#parser.add_argument("-q", "--quiet", action="store_true", help="quiet mode - only warn if all dupes or if more than one orig")
+parser.add_argument("-f", "--data_file", metavar="picklefile", type=str, nargs=1, help="name of pickle file to store program state", default='cards_data.pickle')
+parser.add_argument("-d", "--delete", metavar="card-ID", type=str, nargs=1, help="ID of card to remove")
+parser.add_argument("-i", "--input", metavar="input-cards.xls", type=str, nargs=1, help="Name of XLSX file containing cards")
+parser.add_argument("-o", "--output", metavar="output-transactions.xls", type=str, nargs=1, help="Name of XLSX file containing all transactions")
+args = parser.parse_args()
+
 try:
-    with open(data_file, "rb") as f:
+    with open(args.data_file, "rb") as f:
         cards = pickle.load(f)
         xactions = pickle.load(f)
         xls_file = pickle.load(f)
@@ -71,20 +90,26 @@ try:
 except:
     pass
 
-if 'xls_file' not in vars() or not xls_file:
-    if len(sys.argv) != 3:
-        print("""
-This utility parses an XLSX file with a list of Yenot Bitan cards.
-You can then get a report of all your purchases saved to an output XLSX file.
-For the initial run please add the input and output xlsx files as arguments.
-Once these are setm, they are saved in a pickle file,
-together with any data pulled from the Yenot bitan website.
-Only new cards added to the input XLSX file are read from the internet.
-""")
-        exit()
-    xls_file  = sys.argv[1]
-if 'output_xls_file' not in vars() or not output_xls_file:
-    output_xls_file = sys.argv[2]
+if args.input:
+    xls_file = args.input
+if args.output:
+    output_xls_file = args.output
+
+if args.delete:
+    id = args.delete[0]
+    if cards.get(id, None):
+        del cards[id]
+        print("Deleting", id)
+    else:
+        print("{} already deleted in cards[]".format(id))
+
+if not xls_file:
+    print("No input file defined")
+    sys.exit(1)
+if not output_xls_file:
+    print("No output file defined")
+    sys.exit(1)
+
 wb = load_workbook(filename = xls_file, data_only=True)
 sheet = wb.worksheets[0]
 
@@ -93,6 +118,8 @@ with warnings.catch_warnings():
     for i in range(sheet.min_row, sheet.max_row+1):
         id = sheet.cell(row=i, column=1).value
         code = sheet.cell(row=i, column=2).value
+        if id == args.delete:
+            continue
         if cards.get(id, -1) == 0:
             continue
         if not detect_paytment_method(id, code):
@@ -105,8 +132,16 @@ with warnings.catch_warnings():
         else:
             print("Unknown card:", id)
 
-save_prev_file(data_file, "pickle")
-with open(data_file, "wb") as f:
+if args.delete:
+    x2 = xactions.copy()
+    for (d, id) in x2.keys():
+        if id == args.delete[0]:
+            print("Deleting", d, id)
+            del xactions[(d, id)]
+    x2 = None
+
+save_prev_file(args.data_file, "pickle")
+with open(args.data_file, "wb") as f:
     pickle.dump(cards, f)
     pickle.dump(xactions, f)
     pickle.dump(xls_file, f)
