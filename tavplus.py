@@ -3,7 +3,7 @@
 import json
 import requests
 from openpyxl import Workbook, load_workbook
-from openpyxl.utils import datetime
+from openpyxl.utils import datetime as openpyxl_datetime
 from openpyxl.styles import numbers
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 import warnings
@@ -11,6 +11,7 @@ import pickle
 import os
 import sys
 import argparse
+import datetime
 #import pprint
 
 #pp = pprint.PrettyPrinter(indent=4)
@@ -24,6 +25,31 @@ def save_prev_file(name, ext):
         if os.path.isfile(old):
             os.remove(old)
         os.rename(name, old)
+
+def handle_buyme(id, code):
+    s = requests.Session()
+    bj = s.get(
+        url='https://buyme.co.il/',
+        headers = {'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.99 Safari/537.36'},
+    )
+    if bj.status_code != 200:
+        print("Unexpected error while updating", id, code)
+        sys.exit(1)
+    id = str(id)
+    bj = s.get(url='https://buyme.co.il/siteapi/voucherBalance',
+        params={'serialNumber':id, 'expiryDate':code},
+        headers = {'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.99 Safari/537.36'},
+        verify=False)
+    if bj.status_code != 200:
+        print("Unexpected error while updating", id, code)
+        sys.exit(1)
+    b = json.loads(bj.text)
+    cards[id] = b['value']
+    creation_date = 'T'.join(b['voucher']['crspackage']['created_at'].split(' ')) + ".000"
+    xactions[(creation_date, id)] = {'name': b['title'], 'deposit': True, 'sum': float(b['originalValue'])}
+    for field in b['realizations']:
+        d = 'T'.join(field['date'].split(' ')) + ".000"
+        xactions[(d, id)] = {'name': field['redeemer'], 'deposit': False, 'sum': float(field['amount'])}
 
 def handle_ybitan(id, code):
     bj = requests.post(url='https://tavplus.mltp.co.il/multipassapi/getbudget.php', data={'cardid':id}, verify=False)
@@ -52,10 +78,13 @@ def handle_tav_zahav(id, code):
         xactions[(d, id)] = {'name': field['BusinessName'], 'deposit':dep, 'sum':str(am) if dep else str(-am)}
 
 def detect_paytment_method(id, code):
-    l = len(str(id))
-    if l == 8:
+    l1 = len(str(id))
+    l2 = len(str(code))
+    if (l1, l2) == (16,10):
+        handle_buyme(id, code)
+    elif (l1, l2) == (8, 4):
         handle_ybitan(id, code)
-    elif l == 16:
+    elif (l1, l2) == (16, 3):
         handle_tav_zahav(id, code)
     else:
         print("Unknown ID:", id)
@@ -69,6 +98,7 @@ Only new cards added to the input XLSX file are read from the internet.
 Currently supported:
 Yenot Bitan
 Tav Hazahav (non-7215)
+Buy Me
 TODO:
 Isracard
 Max
@@ -77,9 +107,29 @@ Max
 #parser.add_argument("-q", "--quiet", action="store_true", help="quiet mode - only warn if all dupes or if more than one orig")
 parser.add_argument("-f", "--data_file", metavar="picklefile", type=str, nargs=1, help="name of pickle file to store program state", default='cards_data.pickle')
 parser.add_argument("-d", "--delete", metavar="card-ID", type=str, nargs=1, help="ID of card to remove")
-parser.add_argument("-i", "--input", metavar="input-cards.xls", type=str, nargs=1, help="Name of XLSX file containing cards")
-parser.add_argument("-o", "--output", metavar="output-transactions.xls", type=str, nargs=1, help="Name of XLSX file containing all transactions")
+parser.add_argument("-i", "--input", metavar="input-cards.xls", type=str, help="Name of XLSX file containing cards")
+parser.add_argument("-o", "--output", metavar="output-transactions.xls", type=str, help="Name of XLSX file containing all transactions")
 args = parser.parse_args()
+
+if False:
+    import logging
+
+    # These two lines enable debugging at httplib level (requests->urllib3->http.client)
+    # You will see the REQUEST, including HEADERS and DATA, and RESPONSE with HEADERS but without DATA.
+    # The only thing missing will be the response.body which is not logged.
+    try:
+        import http.client as http_client
+    except ImportError:
+        # Python 2
+        import httplib as http_client
+    http_client.HTTPConnection.debuglevel = 1
+
+    # You must initialize logging, otherwise you'll not see debug output.
+    logging.basicConfig()
+    logging.getLogger().setLevel(logging.DEBUG)
+    requests_log = logging.getLogger("requests.packages.urllib3")
+    requests_log.setLevel(logging.DEBUG)
+    requests_log.propagate = True
 
 try:
     with open(args.data_file, "rb") as f:
@@ -118,6 +168,8 @@ with warnings.catch_warnings():
     for i in range(sheet.min_row, sheet.max_row+1):
         id = sheet.cell(row=i, column=1).value
         code = sheet.cell(row=i, column=2).value
+        if type(code) is datetime.datetime:
+            code = code.strftime("%Y-%m-%d")
         if id == args.delete:
             continue
         if cards.get(id, -1) == 0:
@@ -160,7 +212,7 @@ ws.cell(row=1, column=6).value = "כרטיס"
 row = 2
 for (d, id) in sorted(xactions.keys(), key=lambda item:item[0]):
     fields = xactions[(d, id)]
-    dt = datetime.from_ISO8601(d)
+    dt = openpyxl_datetime.from_ISO8601(d)
     ws.cell(row=row, column=1).value = dt.date()
     ws.cell(row=row, column=2).value = dt.time()
     v = fields['sum']
