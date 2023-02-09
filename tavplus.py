@@ -6,15 +6,16 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.utils import datetime as openpyxl_datetime
 from openpyxl.styles import numbers
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
+from bs4 import BeautifulSoup
 import warnings
 import pickle
 import os
 import sys
 import argparse
 import datetime
-#import pprint
+import pprint
 
-#pp = pprint.PrettyPrinter(indent=4)
+pp = pprint.PrettyPrinter(indent=4)
 
 cards = {}
 xactions = {}
@@ -30,7 +31,7 @@ def handle_buyme(id, code):
     s = requests.Session()
     bj = s.get(
         url='https://buyme.co.il/',
-        headers = {'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.99 Safari/537.36'},
+        headers = {'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36'},
     )
     if bj.status_code != 200:
         print("Unexpected error while updating", id, code)
@@ -44,7 +45,15 @@ def handle_buyme(id, code):
         print("Unexpected error while updating", id, code)
         sys.exit(1)
     b = json.loads(bj.text)
-    cards[id] = b['value']
+    #pp.pprint (bj.text)
+    if b["type"] == -999:
+        print("This buy me card is for a specific gift and has no balance")
+        cards[id] = 0
+        return
+    if b["voucher"]["used"] == 1:
+        cards[id] = 0
+    else:
+        cards[id] = b['value']
     creation_date = 'T'.join(b['voucher']['crspackage']['created_at'].split(' ')) + ".000"
     xactions[(creation_date, id)] = {'name': b['title'], 'deposit': True, 'sum': float(b['originalValue'])}
     for field in b['realizations']:
@@ -52,20 +61,125 @@ def handle_buyme(id, code):
         xactions[(d, id)] = {'name': field['redeemer'], 'deposit': False, 'sum': float(field['amount'])}
 
 def handle_ybitan(id, code):
-    bj = requests.post(url='https://tavplus.mltp.co.il/multipassapi/getbudget.php', data={'cardid':id}, verify=False)
+    #s = requests.Session()
+    #bj = s.get(
+    #    url='https://tavplus.mltp.co.il/',
+    #    headers = {
+    #        'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36',
+    #        'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+    #        'Accept-Encoding': 'gzip, deflate, br',
+    #        'Accept-Language': 'he-IL,he;q=0.9',
+    #    },
+    #)
+    #for c in s.cookies:
+    #    print(c.name, ":", c.value)
+    s = requests
+    cookies = {
+    #    # FortigateServer
+    #    #'FGTServer' : 'BCEEC54F8E668B2C9A9D58EDE9E2373CCC1A7BC98A87F2222E2B84FBDA4F2EEC998E408F4A7601BDFA',
+    #    # google analytics
+        'activechatyWidgets' : '0',
+        'chatyWidget_0' : '[{"k":"v-widget","v":"' + datetime.datetime.now().isoformat(timespec="milliseconds") + '"},{"k":"v-Whatsapp","v":"' + datetime.datetime.now().isoformat(timespec="milliseconds") + '"}]',
+        '_ga' : 'GA1.3.104630825.1658012134',
+    #    # Google cloud load balancer
+    #    'GCLB' : 'CIP92LOJjK3eaA',
+    #    'rbzid':'A70zU7of0H1Kut0CrQ/BvS7P5/u6Lqvwu3rT1BLZHC3VXfXM+HiEqOt6QRGrOIHQoNLFa+Xmqy4aaFK1mY1zgHp6nzkdxcDY2e+RNdAU6/+JE+88jmVO0O72e0QOIJ6L9z6riwE/mwt3bh6qKnSF0WmIeFwjXXwCB1Q7L6Q2h+rJNwF0CXJv7tn5vUptcNhFifwi5mS+Tnj+nKSbT/bwkkb6VfFo3/oQjGtsQxK8QuY1FNv/6nYUBikMbrFd8oLC	',
+    #    'rbzsessionid':'4ca21ca2e15157e0410265a81be2a1cd',
+        '_gid':'GA1.3.1329674055.1658012134',
+    }
+    headers = {
+        'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36',
+    #    'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+    #    'Accept-Encoding': 'gzip, deflate, br',
+    #    'Accept-Language': 'he-IL,he;q=0.9',
+        'origin' : 'https://multipass.co.il',
+        'authority' : 'multipass.co.il',
+        'referer': 'https://multipass.co.il/%D7%91%D7%A8%D7%95%D7%A8-%D7%99%D7%AA%D7%A8%D7%94/',
+    }
+    bj = s.post(url='https://multipass.co.il/wp-admin/admin-ajax.php',
+                headers=headers,
+                cookies=cookies,
+                data={'action':'getbuget', 'newcardid':id}, verify=True)
+    #with open("err.html", "w") as f:
+    #    print(bj.text, file=f)
     b = json.loads(bj.text)
     if b['ResultMessage'] != '' and b['ResultId'] == 0:
         cards[id] = int(b['UpdatedBugdet']) / 100.0
-    bj = requests.post(url='https://tavplus.mltp.co.il/multipassapi/GetLastTransactions.php', data={'cardid':id}, verify=False)
+    bj = requests.post(url='https://multipass.co.il/wp-admin/admin-ajax.php',
+        data={'CardId':id, 'action':'get_table'},
+        headers=headers,
+        cookies=cookies,
+        verify=False)
     b = json.loads(bj.text)
     for field in b['data']:
         d = field['date']
         dep = field['LoadActualSum'] != ''
         xactions[(d, id)] = {'name': field['SupplierName'], 'deposit':dep, 'sum': field['LoadActualSum'] if dep else field['ApprovedSum']}
 
-def handle_tav_zahav(id, code):
-    id = str(id)
-    bj = requests.post(url='https://www.shufersal.co.il/myshufersal/api/CardBalanceApi/GetCardBalanceAndTransactions', data={'cardNumber':str(id)+str(code)}, verify=False)
+
+#
+# Handle 
+#
+#https://stackoverflow.com/questions/59045550/cant-parse-the-username-to-make-sure-im-logged-in-to-a-website/59196651#59196651
+def handle_max(id, code):
+    code = code.split(':')
+    s = requests.Session()
+    bj = s.get(
+        url='https://online.max.co.il/anonymous/giftcard/transactions.aspx',
+        headers = {
+            'User-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/97.0.4692.99 Safari/537.36',
+            'Accept' : 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Accept-Language': 'he-IL,he;q=0.9',
+        },
+    )
+    #extra_cookies = {
+    #    #'ct1' : 'c=fd0545ec-7272-435b-a4e9-03f7e6451154&e=2/8/2024 6:47:49 PM',
+    #    #'ctFingerPrint' : 'V2luZG93cyBDaHJvbWVmYWxzZWhlLUlMMjQ4MTYyNTYwLDE0NDAyNTYwLDE0MDBBc2lhL0plcnVzYWxlbXRydWV0cnVldHJ1ZWZhbHNldHJ1ZW5vdCBhdmFpbGFibGVXaW4zMjdkMWY0NmFhYzE0ZGJhZDg1MDFiYjYxY2EwOWZkNGViYWY4MGNhZjEzN2U2Y2U0MjdlNzNhNjQ4M2U4NDdkYTMwNzhiNzY3MjZlNjJhNzEzN2ZmZGFhMGYyODAwODdlM2U2MGQ2NDFjMGZkNzU2YjBmYTU0ZTM5Y2RlZDRiODZiOWU4YTYyMzg5NzVlY2E3MDk2Yjg3ZDIzYmJlZTZlYTE4MjdjOGYzN2QyOGViM2MzMmU5OTM1ZTA2MWRiYTVhOGZhbHNlZmFsc2VmYWxzZWZhbHNlMCxmYWxzZSxmYWxzZTE1Y2RlYTZjY2NlOTI2ZjkyNjkxMTE5YmU1N2ViZDk0NzFmNmE4ZGE5MDJhZjZmM2FiNmJkMzA1ZjIwMzIzNWUxMjQuMDQzNDc1Mjc1MTYwNzQ=',
+    #}
+    #for c in extra_cookies:
+    #    s.cookies.set(c, extra_cookies[c], domain='max.co.il')
+    pp.pprint(s.cookies)
+    if bj.status_code != 200:
+        print("Unexpected error while updating", id, code)
+        sys.exit(1)
+    bj = s.post(url='https://online.max.co.il/anonymous/giftcard/transactions.aspx', data={
+        'RequestToken' : '/wEFJDNiMGVmNWMxLTY5ZGYtNDI4My1iMzEzLTcxYTM4MmQ2YjQwOQ==',
+        'ctl00$PlaceHolderMain$GiftCardTransactions1$txtMasterRegularUser' : id[0:4],
+        'ctl00$PlaceHolderMain$GiftCardTransactions1$txtRegularUser2' : id[4:8],
+        'ctl00$PlaceHolderMain$GiftCardTransactions1$txtRegularUser3' : id[8:12],
+        'ctl00$PlaceHolderMain$GiftCardTransactions1$txtRegularUser4' : id[12:],
+        'ctl00$PlaceHolderMain$GiftCardTransactions1$ddlCardYear:' : code[1],
+        'ctl00$PlaceHolderMain$GiftCardTransactions1$ddlCardMonth' : code[0],
+        'ctl00$PlaceHolderMain$GiftCardTransactions1$txtCvv' : code[2],
+        'ctl00$MobileAppShow$hdnShowIos' : 'true',
+        'ctl00$MobileAppShow$hdnShowAndroid' : 'false',
+        }, verify=False)
+    pp.pprint(bj.status_code)
+    pp.pprint(bj.cookies)
+    soup = BeautifulSoup(bj.text, 'html.parser')
+    #soup = BeautifulSoup(open("resp.html"), 'html.parser')
+    balance = soup.find('span', id='PlaceHolderMain_GiftCardTransactions1_lblBalance')
+    cards[id] = float(balance.contents[0])
+    print(id, cards[id])
+    transactions = soup.find('table', id='tblGiftCardTransactions').find('tbody')
+    rows = transactions.find_all('tr')
+    for r in rows[1:-1]:
+        tds = r.find_all('td')
+        #print(tds)
+        d = tds[1].contents[0].strip()
+        print(d)
+        n = tds[2].find('span').contents[0].strip()
+        print(n)
+        b = float(tds[4].contents[0].strip())
+        print(b)
+
+    #print(soup.find('div', id='PlaceHolderMain_GiftCardTransactions1_balanceSection'))
+    print()
+    sys.exit(1)
+
+def handle_tav_zahav_8(id, code):
+    bj = requests.post(url='https://www.shufersal.co.il/myshufersal/api/CardBalanceApi/GetCardBalanceAndTransactions', data={'cardNumber':id+str(code)}, verify=False)
     b = json.loads(bj.text)
     if b['HasCard'] == True and b['InactiveCard'] == False:
         cards[id] = b['CurrentBalance']
@@ -84,8 +198,10 @@ def detect_paytment_method(id, code):
         handle_buyme(id, code)
     elif (l1, l2) == (8, 4):
         handle_ybitan(id, code)
-    elif (l1, l2) == (16, 3):
-        handle_tav_zahav(id, code)
+    elif (l1, l2) == (16, 3) and str(id[0]) == '8':
+        handle_tav_zahav_8(str(id), code)
+    elif (l1, l2) == (16, 11) and str(id[0]) == '7':
+        handle_max(str(id), code)
     else:
         print("Unknown ID:", id)
         return False
